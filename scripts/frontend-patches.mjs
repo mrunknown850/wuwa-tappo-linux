@@ -48,8 +48,8 @@ export function patchChestTimers(source) {
   }
   return source
     .replace(timer, 'function Un(){if(!A.isLoggedIn){Bt.value=0,Nt.value=0,Do.value=0,Lo.value=0;return}eo.value=!0;')
-    .replace(visibility, 'function Qr(e){return !!(A.isLoggedIn&&Cr.value||La.value&&e)}')
-    .replace(panes, 'const Zr=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="right"?!1:Jr.value==="left"?Qr(!0):Qr(Vn.value)),ei=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="left"?!1:(Jr.value==="right",Qr(Wn.value)));');
+    // .replace(visibility, 'function Qr(e){return !!(A.isLoggedIn&&Cr.value||La.value&&e)}')
+    // .replace(panes, 'const Zr=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="right"?!1:Jr.value==="left"?Qr(!0):Qr(Vn.value)),ei=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="left"?!1:(Jr.value==="right",Qr(Wn.value)));');
 }
 
 export function patchLoginReady(source) {
