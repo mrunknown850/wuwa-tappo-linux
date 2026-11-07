@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,21 +97,6 @@ export function findAssetEntries(bytes) {
   return [...unique.values()];
 }
 
-// The inner application file name is not part of the official contract: newer
-// NSIS scripts name it from a variable (for example `$_21_`) instead of the
-// product executable. Identify the payload by its Tauri asset table instead.
-export function selectEmbeddedPayload(candidates) {
-  const failures = [];
-  for (const candidate of candidates) {
-    try {
-      return { name: candidate.name, entries: findAssetEntries(candidate.bytes) };
-    } catch (error) {
-      failures.push(`${candidate.name}: ${error.message}`);
-    }
-  }
-  throw new Error(`No Tauri frontend found in the embedded installer payload (${failures.join('; ')})`);
-}
-
 export function findEmbeddedNsis(bytes) {
   readPe(bytes);
   const signature = Buffer.from('\xef\xbe\xad\xdeNullsoftInst', 'latin1');
@@ -131,17 +116,14 @@ export function findEmbeddedNsis(bytes) {
   throw new Error('No structurally valid embedded NSIS installer found.');
 }
 
-export async function writeAssets(entries, output) {
+export async function extractAssets(bytes, output) {
+  const entries = findAssetEntries(bytes);
   for (const entry of entries) {
     const destination = path.join(output, entry.relativePath);
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, entry.data);
   }
   return entries.map(({ data, ...entry }) => ({ ...entry, size: data.length }));
-}
-
-export async function extractAssets(bytes, output) {
-  return writeAssets(findAssetEntries(bytes), output);
 }
 
 function staticReferences(source, extension) {
@@ -177,6 +159,43 @@ export function inspectStaticReferences(entries) {
   return { references, missing: references.filter(reference => !reference.exists) };
 }
 
+// Do not rely on a fixed file name for the app executable inside the
+// installer. Kuro's 1.0.3 installer writes it under a name taken from an NSIS
+// variable, which 7-Zip can only list as a placeholder such as "$_21_".
+// Prefer WuwaTappo.exe; otherwise take the largest file that is not an NSIS
+// plugin or the uninstaller: the app binary carries the whole frontend and is
+// by far the biggest entry. findAssetEntries() validates the choice afterwards.
+function findPayloadName(sevenzip, filename) {
+  const listing = spawnSync(sevenzip, ['l', '-slt', '-bd', filename], {
+    encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  });
+  if (listing.error) throw listing.error;
+  if (listing.status !== 0) throw new Error(`7-Zip listing failed: ${listing.stderr || listing.stdout}`);
+  const entries = [];
+  let current = null;
+  for (const line of listing.stdout.split(/\r?\n/)) {
+    const pathMatch = line.match(/^Path = (.+)$/);
+    if (pathMatch) {
+      current = { path: pathMatch[1], size: 0 };
+      entries.push(current);
+      continue;
+    }
+    const sizeMatch = line.match(/^Size = (\d+)$/);
+    if (sizeMatch && current) current.size = Number(sizeMatch[1]);
+  }
+  const baseName = entry => path.basename(entry.path.replaceAll('\\', '/'));
+  const candidates = entries.filter(entry => path.resolve(entry.path) !== path.resolve(filename)
+    && !entry.path.startsWith('$PLUGINSDIR')
+    && !/uninst/i.test(baseName(entry)));
+  const exact = candidates.find(entry => baseName(entry) === 'WuwaTappo.exe');
+  if (exact) return exact.path;
+  if (!candidates.length) {
+    throw new Error(`No application payload found in the installer. Contents: ${entries.map(entry => entry.path).join(', ')}`);
+  }
+  candidates.sort((a, b) => b.size - a.size);
+  return candidates[0].path;
+}
+
 async function main() {
   const options = {};
   const args = process.argv.slice(2);
@@ -187,8 +206,8 @@ async function main() {
     options[args[index].slice(2)] = args[index + 1];
   }
   if (!options.output || Boolean(options.payload) === Boolean(options.installer)) throw new Error('Choose --payload or --installer and provide --output.');
-  let entries;
-  if (options.payload) entries = findAssetEntries(await readFile(options.payload));
+  let bytes;
+  if (options.payload) bytes = await readFile(options.payload);
   else {
     if (!options.sevenzip) throw new Error('--installer requires --sevenzip; the installer is never executed.');
     const installer = await readFile(options.installer);
@@ -197,22 +216,20 @@ async function main() {
     try {
       const filename = path.join(temporary, 'setup.exe');
       await writeFile(filename, installer.subarray(bounds.start, bounds.end));
-      const result = spawnSync(options.sevenzip, ['e', '-y', '-bd', `-o${temporary}`, filename], {
-        encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+      const payload = findPayloadName(options.sevenzip, filename);
+      console.error(`Using installer payload: ${payload}`);
+      const result = spawnSync(options.sevenzip, ['e', '-y', '-bd', `-o${temporary}`, filename, payload], {
+        encoding: 'utf8', maxBuffer: 1024 * 1024,
       });
       if (result.error) throw result.error;
-      if (result.status !== 0) throw new Error(`7-Zip extraction failed: ${(result.stderr || result.stdout).trim()}`);
-      const candidates = [];
-      for (const item of await readdir(temporary, { withFileTypes: true })) {
-        if (!item.isFile() || item.name === 'setup.exe') continue;
-        candidates.push({ name: item.name, bytes: await readFile(path.join(temporary, item.name)) });
-      }
-      entries = selectEmbeddedPayload(candidates).entries;
+      if (result.status !== 0) throw new Error(`7-Zip extraction failed: ${result.stderr || result.stdout}`);
+      bytes = await readFile(path.join(temporary, path.basename(payload.replaceAll('\\', '/'))));
     } finally { await rm(temporary, { recursive: true, force: true }); }
   }
+  const entries = findAssetEntries(bytes);
   const references = inspectStaticReferences(entries);
   if (references.missing.length) throw new Error(`Unresolved embedded imports: ${JSON.stringify(references.missing)}`);
-  const manifest = await writeAssets(entries, path.resolve(options.output));
+  const manifest = await extractAssets(bytes, path.resolve(options.output));
   console.log(JSON.stringify({ output: path.resolve(options.output), count: manifest.length,
     staticReferences: references.references.length, assets: manifest }, null, 2));
 }

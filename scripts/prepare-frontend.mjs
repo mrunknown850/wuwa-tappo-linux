@@ -6,7 +6,6 @@ import {
   patchChestTimers,
   patchCookieStorage,
   patchDomesticSdkUrls,
-  patchIndexLanguage,
   patchLoginReady,
   patchRelaunch,
   patchSessionRestore,
@@ -42,14 +41,14 @@ function patchOne(description, matches, patch) {
 }
 
 patchOne('modal event bridge', name => /\/modalBridge-[^/]+\.js$/.test(name), patchLoginReady);
-patchOne('About view', (_, content) => content.includes('about_content') && content.includes('系统配置'), patchAbout);
 patchOne('chest timer view', (_, content) => content.includes('function Un(){if(!A.isLoggedIn){Bt.value=0'), patchChestTimers);
-patchOne('login session restore', (_, content) => content.includes('function an(e={}){return Z(),le("infoToken")?') && content.includes('根据 infoToken 恢复登录态失败'), patchSessionRestore);
-patchOne('plugin process relaunch', (_, content) => content.includes(RELAUNCH_SOURCE), patchRelaunch);
+// patchOne('plugin process relaunch', (_, content) => content.includes(RELAUNCH_SOURCE), patchRelaunch);
+// Global: About-Patch (chinesischer Hinweistext) bewusst weggelassen.
 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await cp(source, output, { recursive: true });
-await writeFile(path.join(output, 'index.html'), patchIndexLanguage(index));
+// Global: Sprache bleibt wie im Original (lang="en"), kein Zwang auf zh-CN.
+await writeFile(path.join(output, 'index.html'), index);
 for (const [name, content] of files) await writeFile(path.join(output, name), content);
-console.log(`Prepared official CN frontend at ${output}`);
+console.log(`Prepared official Global frontend at ${output}`);
