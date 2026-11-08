@@ -48,6 +48,10 @@ If rustup is freshly installed, run `rustup default stable` once.
 
 ## Installation
 
+> [!NOTE]
+> For those who use Arch Linux, you can install this from the AUR, maintained by me.
+> [https://aur.archlinux.org/packages/wuwa-tappo-global-bin](https://aur.archlinux.org/packages/wuwa-tappo-global-bin)
+
 1. **Download the official Windows installer** (`WuwaTappo-global_<version>_x64-setup.exe`) from the [official Wuwa Tappo download page](https://download-wutheringwaves-wuwatappo.kurogames-global.com/download/en/). The installer is never executed: the build only reads the frontend files out of it.
 
 2. **Clone and build:**
