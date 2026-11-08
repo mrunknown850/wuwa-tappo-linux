@@ -61,7 +61,7 @@ export function patchLoginReady(source) {
   return source.replace(original, replacement);
 }
 
-export const RELAUNCH_SOURCE = 'async function relaunch(){await invoke("plugin:process|restart")}';
+export const RELAUNCH_SOURCE = 'async function relaunch(){await invoke$1("plugin:process|restart")}';
 
 // The process plugin restarts from the Tauri main thread, which tears down
 // WebKitGTK synchronously and freezes the app. Route the relaunch through a
@@ -70,7 +70,7 @@ export function patchRelaunch(source) {
   if (source.split(RELAUNCH_SOURCE).length !== 2) {
     throw new Error('Original plugin process relaunch changed; reconcile the restart path before building.');
   }
-  return source.replace(RELAUNCH_SOURCE, 'async function relaunch(){await invoke("restart_app")}');
+  return source.replace(RELAUNCH_SOURCE, 'async function relaunch(){await invoke$1("restart_app")}');
 }
 
 export const SESSION_RESTORE_SOURCE = 'function an(e={}){return Z(),le("infoToken")?I||(I=(async()=>{try{return await pe(),e.emitLoginSuccess!==!1&&window.dispatchEvent(new CustomEvent("cat-auth-login-success")),!0}catch(n){return console.error("根据 infoToken 恢复登录态失败:",n),a("auth:session_restore_failed"),l("AUTH","operation_failed",{stage:"session_restore",reason_code:w(n)},"warn"),!1}finally{I=null}})(),I):Promise.resolve(!1)}';

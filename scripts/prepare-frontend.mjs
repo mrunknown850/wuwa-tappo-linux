@@ -42,7 +42,7 @@ function patchOne(description, matches, patch) {
 
 patchOne('modal event bridge', name => /\/modalBridge-[^/]+\.js$/.test(name), patchLoginReady);
 patchOne('chest timer view', (_, content) => content.includes('function Un(){if(!A.isLoggedIn){Bt.value=0'), patchChestTimers);
-// patchOne('plugin process relaunch', (_, content) => content.includes(RELAUNCH_SOURCE), patchRelaunch);
+patchOne('plugin process relaunch', (_, content) => content.includes(RELAUNCH_SOURCE), patchRelaunch);
 // Global: About-Patch (chinesischer Hinweistext) bewusst weggelassen.
 
 await rm(output, { recursive: true, force: true });
