@@ -1,6 +1,7 @@
 mod geometry;
 mod input;
 mod layout;
+mod layer;
 mod menu;
 mod pointer;
 mod shape;
@@ -84,30 +85,46 @@ fn handle(invoke: Invoke) -> bool {
     handler(invoke)
 }
 
+/// Fuer `--probe-layer-shell` in main.rs: Kann der laufende Wayland-Compositor
+/// wlr-layer-shell? Nur in einem eigenen Prozess aufrufen (initialisiert GTK).
+pub fn layer_shell_supported() -> bool {
+    gtk::init().is_ok() && gtk_layer_shell::is_supported()
+}
+
 pub fn run() {
-    // This lock covers direct binary launches and desktop entries that bypass
-    // run.sh. Keep the guard alive until the event loop exits.
-    let instance_lock = single_instance::SharedLock::new(match single_instance::acquire() {
-        Ok(Some(lock)) => lock,
-        Ok(None) => {
-            eprintln!("Wuwa Tappo is already running.");
-            return;
-        }
-        Err(error) => {
-            eprintln!("Could not enforce a single instance: {error}");
-            return;
-        }
-    });
-    // Tauri's update restart spawns the replacement process just before this
-    // one exits. Release the lock first so the new process can acquire it.
-    let exit_lock = instance_lock.clone();
+    // // This lock covers direct binary launches and desktop entries that bypass
+    // // run.sh. Keep the guard alive until the event loop exits.
+    // let instance_lock = single_instance::SharedLock::new(match single_instance::acquire() {
+    //     Ok(Some(lock)) => lock,
+    //     Ok(None) => {
+    //         eprintln!("Wuwa Tappo is already running.");
+    //         return;
+    //     }
+    //     Err(error) => {
+    //         eprintln!("Could not enforce a single instance: {error}");
+    //         return;
+    //     }
+    // });
+    // // Tauri's update restart spawns the replacement process just before this
+    // // one exits. Release the lock first so the new process can acquire it.
+    // let exit_lock = instance_lock.clone();
 
     let app = tauri::Builder::default()
+        // Muss als erstes Plugin registriert werden: Eine zweite Instanz (z.B.
+        // gestartet vom Browser mit einem wuwa-buddy://-Link) reicht ihre
+        // Argumente an die laufende App weiter und beendet sich. Mit dem
+        // Feature "deep-link" loest das automatisch "deep-link://new-url" aus.
+        .plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {
+            eprintln!("Second instance forwarded {} argument(s)", argv.len());
+        }))
+        // Stellt plugin:deep-link|get_current und das Event deep-link://new-url
+        // bereit, auf die der Global-Login (bindOverseasAuthDeepLink) wartet.
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .manage(windows::WindowState::default())
-        .manage(instance_lock.clone())
+        // .manage(instance_lock.clone())
         .manage(input::InputMonitor::new())
         .manage(socket::SocketState::default())
         .invoke_handler(handle)
@@ -152,7 +169,7 @@ pub fn run() {
             return;
         }
     };
-    app.run(move |app, event| {
+    app.run(|app, event| {
         if let tauri::RunEvent::Exit = event {
             socket::shutdown(app);
             if let Some(monitor) = app.try_state::<system::SystemMonitor>() {
@@ -163,7 +180,7 @@ pub fn run() {
             if let Err(error) = app.state::<input::InputMonitor>().stop() {
                 eprintln!("Input shutdown failed: {error}");
             }
-            exit_lock.release();
+            // exit_lock.release();
         }
     });
 }

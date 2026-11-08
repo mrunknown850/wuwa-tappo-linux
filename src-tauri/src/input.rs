@@ -259,6 +259,43 @@ struct InputAbsInfo {
     resolution: i32,
 }
 
+/// Gamepad-Tasten, die der Windows-Client mitzaehlt (die digitalen XInput-
+/// Tasten). Analoge Eingaben (Sticks, Trigger) zaehlen dort nicht, deshalb
+/// fehlen hier auch BTN_TL2/BTN_TR2 (0x138/0x139): Manche Controller melden
+/// ihre analogen Trigger zusaetzlich als Taste.
+fn is_gamepad_button(code: u16) -> bool {
+    matches!(code,
+        0x120..=0x12f            // BTN_TRIGGER..BTN_DEAD: einfache Joysticks/Gamepads
+        | 0x130..=0x137          // BTN_SOUTH..BTN_TR: A/B/X/Y, Schultertasten
+        | 0x13a..=0x13e          // BTN_SELECT, BTN_START, BTN_MODE, Stick-Klicks
+        | 0x220..=0x223          // BTN_DPAD_*: Steuerkreuz als Tasten
+        | 0x2c0..=0x2e7          // BTN_TRIGGER_HAPPY*: Zusatztasten, Steuerkreuz
+    )
+}
+
+/// ABS_HAT0X..ABS_HAT3Y: Die meisten Controller melden das Steuerkreuz nicht
+/// als Tasten, sondern als Achse mit den Werten -1, 0 und 1.
+fn is_hat_axis(code: u16) -> bool {
+    (0x10..=0x17).contains(&code)
+}
+
+/// Meldet einen Controller-Tastendruck ans Frontend (zaehlt dort als Klick).
+/// Steam Input spiegelt Controller als virtuelles Xbox-Pad: Derselbe Druck
+/// kommt dann von zwei Geraeten kurz hintereinander. Gleiche Tasten innerhalb
+/// von 40 ms zaehlen deshalb nur einmal.
+fn gamepad_press(app: &AppHandle, recent: &mut BTreeMap<u32, Instant>, id: u32) {
+    let now = Instant::now();
+    if recent
+        .get(&id)
+        .is_some_and(|last| now.duration_since(*last) < Duration::from_millis(40))
+    {
+        return;
+    }
+    recent.insert(id, now);
+    let _ = app.emit("gamepad-button-press", ());
+    // let _ = gamepad_press(&app, &mut recent_gamepad, id);
+}
+
 struct Device {
     _path: PathBuf,
     file: File,
@@ -270,9 +307,6 @@ struct Device {
 
 /// Linux exposes controller buttons as EV_KEY codes above the keyboard range.
 /// Include joystick, gamepad, and "trigger happy" mappings used by older pads.
-fn is_gamepad_button(code: u16) -> bool {
-    matches!(code, 0x120..=0x12b | 0x130..=0x13f | 0x220..=0x223 | 0x2c0..=0x2e7)
-}
 
 fn hat_axis(code: u16) -> Option<usize> {
     match code {
@@ -510,20 +544,26 @@ fn mouse_sample(
     let window = app.get_webview_window("main")?;
     let tauri_scale = window.scale_factor().ok()?.max(f64::EPSILON);
     let dpr = crate::windows::webview_scale(app);
-    let (cursor_x, cursor_y) = pointer
-        .and_then(crate::pointer::PointerReader::position)
-        .or_else(|| {
-            window
-                .cursor_position()
-                .ok()
-                .map(|position| (position.x, position.y))
-        })?;
     let origin = window.inner_position().ok()?;
-    // The official frontend converts the payload with Tauri's scale factor and
-    // inner position. Convert physical -> CSS with WebKit's real DPR, then back
-    // to the payload coordinate space the frontend expects.
-    let (css_x, css_y) =
-        crate::geometry::physical_to_css(cursor_x, cursor_y, origin.x as f64, origin.y as f64, dpr);
+    let (css_x, css_y) = if let Some(layer_cursor) = crate::layer::cursor() {
+        // Wayland-Overlay: Position kommt direkt in CSS-Pixeln aus GTK. Ist der
+        // Zeiger nicht ueber dem Pet, melden wir eine Position weit ausserhalb,
+        // damit Klicks gezaehlt werden, aber nichts am Pet ausloesen.
+        layer_cursor.unwrap_or((-100_000.0, -100_000.0))
+    } else {
+        let (cursor_x, cursor_y) = pointer
+            .and_then(crate::pointer::PointerReader::position)
+            .or_else(|| {
+                window
+                    .cursor_position()
+                    .ok()
+                    .map(|position| (position.x, position.y))
+            })?;
+        // The official frontend converts the payload with Tauri's scale factor and
+        // inner position. Convert physical -> CSS with WebKit's real DPR, then back
+        // to the payload coordinate space the frontend expects.
+        crate::geometry::physical_to_css(cursor_x, cursor_y, origin.x as f64, origin.y as f64, dpr)
+    };
     let (x, y) = crate::geometry::css_to_payload(
         css_x,
         css_y,
@@ -606,11 +646,9 @@ fn run_monitor(
     let _ = ready.send(Ok(()));
 
     let mut pressed_keys = BTreeSet::new();
-    // Modifier state for shortcut matching. Unlike `pressed_keys`, this ignores
-    // auto-repeat so a held Ctrl cannot drop out of a chord.
     let mut held_keys = BTreeSet::new();
     let mut pressed_buttons: BTreeMap<&'static str, bool> = BTreeMap::new();
-    let mut pressed_gamepad_buttons = BTreeSet::new();
+    let mut recent_gamepad: BTreeMap<u32, Instant> = BTreeMap::new();
     let mut last_scan = Instant::now();
     let mut last_position: Option<(f64, f64)> = None;
     let mut last_move_emit = Instant::now() - Duration::from_millis(100);
@@ -672,7 +710,8 @@ fn run_monitor(
                             let directions = hat_directions(device.hat[0], device.hat[1]);
                             for (direction, pressed) in directions.iter().enumerate() {
                                 if *pressed && !device.hat_directions[direction] {
-                                    let _ = app.emit("gamepad-button-press", ());
+                                    let id = 0x1_0000 + direction as u32;
+                                    gamepad_press(&app, &mut recent_gamepad, id);
                                 }
                             }
                             device.hat_directions = directions;
@@ -684,13 +723,21 @@ fn run_monitor(
                             );
                             let pressed = trigger_pressed(event.value, range);
                             if pressed && !device.triggers[trigger] {
-                                let _ = app.emit("gamepad-button-press", ());
+                                let id = 0x2_0000 + trigger as u32;
+                                gamepad_press(&app, &mut recent_gamepad, id);
                             }
                             device.triggers[trigger] = pressed;
                         }
                         continue;
                     }
                     if event.type_ != EV_KEY {
+                        continue;
+                    }
+                    if is_gamepad_button(event.code) {
+                        // Nur das Druecken zaehlt, nicht Loslassen oder Wiederholung.
+                        if event.value == 1 {
+                            gamepad_press(&app, &mut recent_gamepad, u32::from(event.code));
+                        }
                         continue;
                     }
                     if (272..=274).contains(&event.code) {
@@ -731,14 +778,6 @@ fn run_monitor(
                             member_id: position.member_id,
                         };
                         let _ = app.emit("mouse-button", payload);
-                    } else if is_gamepad_button(event.code) {
-                        if event.value == 1 {
-                            if pressed_gamepad_buttons.insert(event.code) {
-                                let _ = app.emit("gamepad-button-press", ());
-                            }
-                        } else if event.value == 0 {
-                            pressed_gamepad_buttons.remove(&event.code);
-                        }
                     } else if event.code < 256 {
                         // evdev value 2 is auto-repeat. The official backend
                         // only releases a key on the matching key-up event.
@@ -782,7 +821,6 @@ fn run_monitor(
                     pressed_keys.clear();
                     held_keys.clear();
                     pressed_buttons.clear();
-                    pressed_gamepad_buttons.clear();
                 }
             }
         }

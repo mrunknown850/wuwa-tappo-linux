@@ -3,8 +3,8 @@
 // new official release cannot silently produce a half-patched build.
 
 export function patchDomesticSdkUrls(source) {
-  if (!source.includes('const APP_REGION="CN"')) {
-    throw new Error('Expected the official CN frontend. Extract the CN installer before building.');
+  if (!source.includes('const APP_REGION="GLOBAL"')) {
+    throw new Error('Expected the official Global frontend. Extract the Global installer before building.');
   }
   let changes = 0;
   const patched = source.replace(
@@ -15,7 +15,7 @@ export function patchDomesticSdkUrls(source) {
     },
   );
   if (changes !== 2) {
-    throw new Error(`Expected 2 CN SDK URLs, found ${changes}. Reconcile the app version before building.`);
+    throw new Error(`Expected 2 SDK URLs, found ${changes}. Reconcile the app version before building.`);
   }
   return patched;
 }
@@ -48,8 +48,8 @@ export function patchChestTimers(source) {
   }
   return source
     .replace(timer, 'function Un(){if(!A.isLoggedIn){Bt.value=0,Nt.value=0,Do.value=0,Lo.value=0;return}eo.value=!0;')
-    .replace(visibility, 'function Qr(e){return !!(A.isLoggedIn&&Cr.value||La.value&&e)}')
-    .replace(panes, 'const Zr=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="right"?!1:Jr.value==="left"?Qr(!0):Qr(Vn.value)),ei=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="left"?!1:(Jr.value==="right",Qr(Wn.value)));');
+    // .replace(visibility, 'function Qr(e){return !!(A.isLoggedIn&&Cr.value||La.value&&e)}')
+    // .replace(panes, 'const Zr=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="right"?!1:Jr.value==="left"?Qr(!0):Qr(Vn.value)),ei=pe(()=>A.isLoggedIn&&Cr.value?!0:Jr.value==="left"?!1:(Jr.value==="right",Qr(Wn.value)));');
 }
 
 export function patchLoginReady(source) {
